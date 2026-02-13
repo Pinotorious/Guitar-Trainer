@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pentatonic Randomizer</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 24px; background:#0b0c10; color:#e6e6e6; }
+    .wrap { max-width: 900px; margin: 0 auto; }
+    h1 { margin: 0 0 12px; font-size: 22px; }
+    .row { display:flex; gap:12px; flex-wrap: wrap; margin: 12px 0; }
+    .card { background:#151722; border:1px solid #2a2e44; border-radius:14px; padding:14px 16px; flex: 1 1 260px; }
+    .big { font-size: 28px; font-weight: 700; letter-spacing: 0.2px; }
+    .label { opacity: 0.75; font-size: 12px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.12em; }
+    button, select, input { background:#1f2333; color:#e6e6e6; border:1px solid #343a57; border-radius: 10px; padding:10px 12px; font-size: 14px; }
+    button { cursor:pointer; }
+    button:hover { border-color:#505a86; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .hint { opacity:0.85; font-size: 14px; line-height: 1.35; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .tiny { opacity:0.7; font-size: 12px; margin-top: 10px; }
+    .split { display:flex; gap:12px; flex-wrap: wrap; }
+    .split > * { flex: 1 1 210px; }
+    .pill { display:inline-block; padding: 4px 8px; border:1px solid #343a57; border-radius: 999px; font-size: 12px; opacity: 0.9; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎸 Pentatonic Randomizer (Minor + Major)</h1>
+
+  <div class="row split">
+    <div class="card">
+      <div class="label">Key mode</div>
+      <select id="keyMode">
+        <option value="random">Random key each prompt</option>
+        <option value="locked">Lock key</option>
+      </select>
+      <div style="height:10px"></div>
+      <div class="label">Locked key (if enabled)</div>
+      <select id="lockedKey"></select>
+      <div class="tiny">Keys include sharps + flats as friendly spellings.</div>
+    </div>
+
+    <div class="card">
+      <div class="label">Fret range (for internal answer)</div>
+      <div class="row" style="margin:0">
+        <div>
+          <div class="label">Min fret</div>
+          <input id="minFret" type="number" value="0" min="0" max="24" />
+        </div>
+        <div>
+          <div class="label">Max fret</div>
+          <input id="maxFret" type="number" value="15" min="0" max="24" />
+        </div>
+      </div>
+      <div class="tiny">Prompt hides the fret; range just controls which frets get chosen.</div>
+    </div>
+
+    <div class="card">
+      <div class="label">Generate</div>
+      <div class="row" style="margin:0">
+        <button id="btnNew">New Prompt</button>
+        <button id="btnReveal" disabled>Reveal Fret</button>
+        <button id="btnCopy">Allow Copy</button>
+      </div>
+      <div class="tiny">“Reveal Fret” toggles the hidden fret number.</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <div class="label">Prompt</div>
+      <div id="prompt" class="big mono">Click “New Prompt”.</div>
+      <div class="tiny mono" id="promptMeta"></div>
+      <div class="tiny" id="revealLine" style="display:none;">
+        <span class="pill mono">Answer fret:</span>
+        <span class="mono" id="fretAnswer"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <div class="label">Answer check</div>
+      <div class="hint" id="answer"></div>
+    </div>
+    <div class="card">
+      <div class="label">How to use this</div>
+      <div class="hint">
+        1) Find the note on the given string (no fret shown).<br/>
+        2) Decide whether it fits the focus pent sound (minor/major) and where the roots are.<br/>
+        3) If stuck, hit <b>Reveal Fret</b> to check.<br/>
+        4) Make a 4–6 note phrase and land on root or 5.<br/>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // Note spelling: prefer flats for some keys for readability.
+  const NOTE_NAMES = ["C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"];
+
+  // Standard tuning strings (string 6 = low E)
+  const STRINGS = [
+    { num: 6, name: "E (low)", open: "E" },
+    { num: 5, name: "A",       open: "A" },
+    { num: 4, name: "D",       open: "D" },
+    { num: 3, name: "G",       open: "G" },
+    { num: 2, name: "B",       open: "B" },
+    { num: 1, name: "E (high)",open: "E" },
+  ];
+
+  const openIndex = (noteName) => NOTE_NAMES.indexOf(noteName);
+
+  const elKeyMode = document.getElementById("keyMode");
+  const elLockedKey = document.getElementById("lockedKey");
+  const elMinFret = document.getElementById("minFret");
+  const elMaxFret = document.getElementById("maxFret");
+  const elPrompt = document.getElementById("prompt");
+  const elPromptMeta = document.getElementById("promptMeta");
+  const elAnswer = document.getElementById("answer");
+  const btnNew = document.getElementById("btnNew");
+  const btnReveal = document.getElementById("btnReveal");
+  const btnCopy = document.getElementById("btnCopy");
+  const revealLine = document.getElementById("revealLine");
+  const fretAnswer = document.getElementById("fretAnswer");
+
+  // Populate keys (12)
+  NOTE_NAMES.forEach(n => {
+    const opt = document.createElement("option");
+    opt.value = n;
+    opt.textContent = n;
+    elLockedKey.appendChild(opt);
+  });
+  elLockedKey.value = "D";
+
+  function mod(n, m) { return ((n % m) + m) % m; }
+
+  function noteAt(stringOpen, fret) {
+    const idx = openIndex(stringOpen);
+    return NOTE_NAMES[mod(idx + fret, 12)];
+  }
+
+  // Relative major/minor: minor root is 3 semitones DOWN from major root.
+  // Example: C major ↔ A minor.
+  function relativeMajorFromMinor(minorRoot) {
+    const i = NOTE_NAMES.indexOf(minorRoot);
+    return NOTE_NAMES[mod(i + 3, 12)];
+  }
+  function relativeMinorFromMajor(majorRoot) {
+    const i = NOTE_NAMES.indexOf(majorRoot);
+    return NOTE_NAMES[mod(i - 3, 12)];
+  }
+
+  // Pentatonic pitch classes
+  function minorPentSet(root) {
+    const i = NOTE_NAMES.indexOf(root);
+    const intervals = [0, 3, 5, 7, 10]; // 1 b3 4 5 b7
+    return new Set(intervals.map(x => NOTE_NAMES[mod(i + x, 12)]));
+  }
+  function majorPentSet(root) {
+    const i = NOTE_NAMES.indexOf(root);
+    const intervals = [0, 2, 4, 7, 9]; // 1 2 3 5 6
+    return new Set(intervals.map(x => NOTE_NAMES[mod(i + x, 12)]));
+  }
+
+  function randInt(a, b) { // inclusive
+    return Math.floor(Math.random() * (b - a + 1)) + a;
+  }
+  function choice(arr) { return arr[randInt(0, arr.length - 1)]; }
+
+  function clampFretRange() {
+    let min = Number(elMinFret.value);
+    let max = Number(elMaxFret.value);
+    if (Number.isNaN(min)) min = 0;
+    if (Number.isNaN(max)) max = 12;
+    min = Math.max(0, Math.min(24, min));
+    max = Math.max(0, Math.min(24, max));
+    if (max < min) [min, max] = [max, min];
+    elMinFret.value = String(min);
+    elMaxFret.value = String(max);
+    return { min, max };
+  }
+
+  function nearestRootsOnString(root, stringOpen, fret) {
+    const openIdx = openIndex(stringOpen);
+    const rootIdx = NOTE_NAMES.indexOf(root);
+    const base = mod(rootIdx - openIdx, 12); // one solution in [0,11]
+    const candidates = [];
+    for (let k = -2; k <= 3; k++) {
+      const f = base + 12 * k;
+      if (f >= 0 && f <= 24) candidates.push(f);
+    }
+    candidates.sort((a,b) => Math.abs(a - fret) - Math.abs(b - fret));
+    return candidates.slice(0, 2);
+  }
+
+  // State for current prompt
+  const state = {
+    hasPrompt: false,
+    revealOn: false,
+    key: null,
+    home: null,
+    str: null,
+    fret: null,
+    note: null,
+    minorKey: null,
+    majorKey: null,
+    minSet: null,
+    majSet: null
+  };
+
+  function setReveal(on) {
+    state.revealOn = on;
+    revealLine.style.display = on ? "block" : "none";
+    btnReveal.textContent = on ? "Hide Fret" : "Reveal Fret";
+    if (on) fretAnswer.textContent = `String ${state.str.num}, fret ${state.fret}`;
+  }
+
+  function makePrompt() {
+    const { min, max } = clampFretRange();
+    state.str = choice(STRINGS);
+    state.fret = randInt(min, max);
+
+    state.key = (elKeyMode.value === "locked") ? elLockedKey.value : choice(NOTE_NAMES);
+    state.home = (Math.random() < 0.5) ? "minor" : "major";
+
+    state.note = noteAt(state.str.open, state.fret);
+
+    state.minorKey = (state.home === "minor") ? state.key : relativeMinorFromMajor(state.key);
+    state.majorKey = (state.home === "major") ? state.key : relativeMajorFromMinor(state.key);
+
+    state.minSet = minorPentSet(state.minorKey);
+    state.majSet = majorPentSet(state.majorKey);
+
+    const promptLine =
+      `Focus: ${state.home.toUpperCase()} pent (${state.home === "minor" ? state.minorKey : state.majorKey})` +
+      `  |  String ${state.str.num} (${state.str.name})  |  Find note: ${state.note}`;
+
+    elPrompt.textContent = promptLine;
+    elPromptMeta.textContent =
+      `Relative keys: ${state.minorKey} minor ↔ ${state.majorKey} major  •  (fret hidden until you reveal)`;
+
+    // Answer/check
+    const inMinor = state.minSet.has(state.note);
+    const inMajor = state.majSet.has(state.note);
+
+    const nearestMinorRoots = nearestRootsOnString(state.minorKey, state.str.open, state.fret);
+    const nearestMajorRoots = nearestRootsOnString(state.majorKey, state.str.open, state.fret);
+
+    const answerLines = [];
+    answerLines.push(`<span class="mono">Note:</span> <b>${state.note}</b>`);
+    answerLines.push(`<span class="mono">Minor pent ( ${state.minorKey} )</span>: ${inMinor ? "✅ in set" : "❌ not in set"} (${[...state.minSet].join(", ")})`);
+    answerLines.push(`<span class="mono">Major pent ( ${state.majorKey} )</span>: ${inMajor ? "✅ in set" : "❌ not in set"} (${[...state.majSet].join(", ")})`);
+    answerLines.push(`<br/><span class="mono">Nearest ${state.minorKey} roots on this string:</span> ${nearestMinorRoots.map(f=>`fret ${f}`).join("  /  ")}`);
+    answerLines.push(`<span class="mono">Nearest ${state.majorKey} roots on this string:</span> ${nearestMajorRoots.map(f=>`fret ${f}`).join("  /  ")}`);
+    answerLines.push(`<br/><span class="mono">Mini-task:</span> make a 4–6 note phrase that <b>lands on the root</b> (minor or major).`);
+
+    elAnswer.innerHTML = answerLines.join("<br/>");
+
+    // Reset reveal state
+    state.hasPrompt = true;
+    btnReveal.disabled = false;
+    setReveal(false);
+
+    // Store last prompt for copy
+    window.__lastPromptText = [
+      promptLine,
+      `Hidden location: String ${state.str.num}, fret ${state.fret}`,
+      `Relative keys: ${state.minorKey} minor ↔ ${state.majorKey} major`,
+      `Minor set: ${[...state.minSet].join(", ")}`,
+      `Major set: ${[...state.majSet].join(", ")}`,
+    ].join("\n");
+  }
+
+  btnNew.addEventListener("click", makePrompt);
+
+  btnReveal.addEventListener("click", () => {
+    if (!state.hasPrompt) return;
+    setReveal(!state.revealOn);
+  });
+
+  btnCopy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(window.__lastPromptText || "");
+      btnCopy.textContent = "Copied ✓";
+      setTimeout(() => btnCopy.textContent = "Allow Copy", 900);
+    } catch {
+      btnCopy.textContent = "Copy failed";
+      setTimeout(() => btnCopy.textContent = "Allow Copy", 900);
+    }
+  });
+
+  // UX: disable lockedKey dropdown unless locked
+  function syncLockUI() {
+    elLockedKey.disabled = (elKeyMode.value !== "locked");
+  }
+  elKeyMode.addEventListener("change", syncLockUI);
+  syncLockUI();
+})();
+</script>
+</body>
+</html>
